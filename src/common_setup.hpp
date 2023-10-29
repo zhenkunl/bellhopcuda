@@ -154,11 +154,7 @@ template<bool O3D, typename T> inline void trackdeallocate(
     uint64_t *ptr2 = (uint64_t *)ptr;
     ptr2 -= 2;
     GetInternal(params)->usedMemory -= *ptr2;
-#ifdef BHC_BUILD_CUDA
-    checkCudaErrors(cudaFree(ptr2));
-#else
     free(ptr2);
-#endif
     ptr = nullptr;
 }
 
@@ -174,11 +170,7 @@ template<bool O3D, typename T> inline void trackallocate(
             "Insufficient memory to allocate %s, need more than %" PRIu64 " MiB",
             description, (GetInternal(params)->usedMemory + s2) / (1024ull * 1024ull));
     }
-#ifdef BHC_BUILD_CUDA
-    checkCudaErrors(cudaMallocManaged(&ptr2, s2));
-#else
     ptr2 = (uint64_t *)malloc(s2);
-#endif
     *ptr2 = s2;
     GetInternal(params)->usedMemory += s2;
     ptr = (T *)(ptr2 + 2);
@@ -187,6 +179,42 @@ template<bool O3D, typename T> inline void trackallocate(
     memset(ptr, 0xFE, s);
 #endif
 }
+
+#ifdef BHC_BUILD_CUDA
+template<bool O3D, typename T> inline void trackdeallocate_gpu(
+    const bhcParams<O3D> &params, T *&ptr)
+{
+    if(ptr == nullptr) return;
+    // Size stored two 64-bit words before returned pointer. 16 byte aligned.
+    uint64_t *ptr2 = (uint64_t *)ptr;
+    ptr2 -= 2;
+    // GetInternal(params)->usedMemory -= *ptr2;
+    checkCudaErrors(cudaFree(ptr2));
+    ptr = nullptr;
+}
+
+template<bool O3D, typename T> inline void trackallocate_gpu(
+    const bhcParams<O3D> &params, const char *description, T *&ptr, size_t n = 1)
+{
+    if(ptr != nullptr) trackdeallocate_gpu(params, ptr);
+    uint64_t *ptr2;
+    uint64_t s  = ((n * sizeof(T)) + 15ull) & ~15ull; // Round up to 16 byte aligned
+    uint64_t s2 = s + 16ull; // Total size to allocate, including size info
+    // if(GetInternal(params)->usedMemory + s2 > GetInternal(params)->maxMemory) {
+    //     EXTERR(
+    //         "Insufficient memory to allocate %s, need more than %" PRIu64 " MiB",
+    //         description, (GetInternal(params)->usedMemory + s2) / (1024ull * 1024ull));
+    // }
+    checkCudaErrors(cudaMalloc(&ptr2, s2));
+    // *ptr2 = s2;
+    // GetInternal(params)->usedMemory += s2;
+    ptr = (T *)(ptr2 + 2);
+// #ifdef BHC_DEBUG
+//     // Debugging: Fill memory with garbage data to help detect uninitialized vars
+//     memset(ptr, 0xFE, s);
+// #endif
+}
+#endif
 
 ////////////////////////////////////////////////////////////////////////////////
 // Vector input related

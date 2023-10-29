@@ -550,6 +550,24 @@ template<bool O3D> struct bhcParams {
     FreqInfo *freqinfo;
     BeamStructure<O3D> *Beam;
     SBPInfo *sbp;
+#ifdef BHC_BUILD_CUDA
+    BdryType *Bdry_gpu;
+    BdryInfo<O3D> *bdinfo_gpu;
+    ReflectionInfo *refl_gpu;
+    SSPStructure *ssp_gpu;
+    Position *Pos_gpu;
+    AnglesStructure *Angles_gpu;
+    FreqInfo *freqinfo_gpu;
+    BeamStructure<O3D> *Beam_gpu;
+    SBPInfo *sbp_gpu;
+    BdryInfo<O3D> *bdinfo_tmp;
+    ReflectionInfo *refl_tmp;
+    SSPStructure *ssp_tmp;
+    Position *Pos_tmp;
+    AnglesStructure *Angles_tmp;
+    FreqInfo *freqinfo_tmp;
+    SBPInfo *sbp_tmp;
+#endif
     /// Pointer to internal data structure for program (non-marine-related) state.
     void *internal;
 };
@@ -559,6 +577,13 @@ template<bool O3D, bool R3D> struct bhcOutputs {
     cpxf *uAllSources;
     EigenInfo *eigen;
     ArrInfo *arrinfo;
+#ifdef BHC_BUILD_CUDA
+    cpxf *uAllSources_gpu;
+    EigenInfo *eigen_gpu;
+    ArrInfo *arrinfo_gpu;
+    EigenInfo *eigen_tmp;
+    ArrInfo *arrinfo_tmp;
+#endif
 };
 
 } // namespace bhc

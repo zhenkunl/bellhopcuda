@@ -18,6 +18,7 @@ this program. If not, see <https://www.gnu.org/licenses/>.
 */
 #include "@CMAKE_SOURCE_DIR@/src/mode/fieldimpl.hpp"
 #include "@CMAKE_SOURCE_DIR@/src/trace.hpp"
+#include "@CMAKE_SOURCE_DIR@/src/common_setup.hpp"
 
 namespace bhc { namespace mode {
 
@@ -25,6 +26,392 @@ namespace bhc { namespace mode {
 #define LAUNCH_BOUNDS __launch_bounds__(NUM_THREADS, 1)
 
 using GENCFG = CfgSel<@BHCGENRUN@, @BHCGENINFL@, @BHCGENSSP@>;
+
+template<typename CFG, bool O3D, bool R3D> void Copy2Gpu(
+    bhcParams<O3D> &params, bhcOutputs<O3D, R3D> &outputs)
+{
+    // 1. copy params.Bdry to GPU
+    uint64_t s = (sizeof(BdryType) + 15ull) & ~15ull; // Round up to 16 byte aligned
+    checkCudaErrors(cudaMemcpy(params.Bdry_gpu, params.Bdry, s, cudaMemcpyHostToDevice));
+    // printf("params.Bdry\n");
+
+    // 2. copy params.bdinfo to GPU
+    BdryInfo<O3D> *bdinfo             = params.bdinfo;
+    BdryInfo<O3D> *bdinfo_tmp         = params.bdinfo_tmp;
+    BdryInfo<O3D> *bdinfo_gpu         = params.bdinfo_gpu;
+    *bdinfo_tmp                       = *bdinfo;
+    BdryInfoTopBot<O3D> *bdinfotb     = &bdinfo->top;
+    BdryInfoTopBot<O3D> *bdinfotb_tmp = &bdinfo_tmp->top;
+    bdinfotb_tmp->bd                  = nullptr;
+    if constexpr(O3D) {
+        trackallocate_gpu(
+            params, "Altimetry", bdinfotb_tmp->bd, bdinfotb->NPts.x * bdinfotb->NPts.y);
+        checkCudaErrors(cudaMemcpy(
+            bdinfotb_tmp->bd, bdinfotb->bd,
+            sizeof(bdinfotb->bd[0]) * bdinfotb->NPts.x * bdinfotb->NPts.y,
+            cudaMemcpyHostToDevice));
+    } else {
+        trackallocate_gpu(params, "Altimetry", bdinfotb_tmp->bd, bdinfotb->NPts);
+        checkCudaErrors(cudaMemcpy(
+            bdinfotb_tmp->bd, bdinfotb->bd, sizeof(bdinfotb->bd[0]) * bdinfotb->NPts,
+            cudaMemcpyHostToDevice));
+    }
+    bdinfotb         = &params.bdinfo->bot;
+    bdinfotb_tmp     = &params.bdinfo_tmp->bot;
+    bdinfotb_tmp->bd = nullptr;
+    if constexpr(O3D) {
+        trackallocate_gpu(
+            params, "Bathymetry", bdinfotb_tmp->bd, bdinfotb->NPts.x * bdinfotb->NPts.y);
+        checkCudaErrors(cudaMemcpy(
+            bdinfotb_tmp->bd, bdinfotb->bd,
+            sizeof(bdinfotb->bd[0]) * bdinfotb->NPts.x * bdinfotb->NPts.y,
+            cudaMemcpyHostToDevice));
+    } else {
+        trackallocate_gpu(params, "Bathymetry", bdinfotb_tmp->bd, bdinfotb->NPts);
+        checkCudaErrors(cudaMemcpy(
+            bdinfotb_tmp->bd, bdinfotb->bd, sizeof(bdinfotb->bd[0]) * bdinfotb->NPts,
+            cudaMemcpyHostToDevice));
+    }
+    s = (sizeof(BdryInfo<O3D>) + 15ull) & ~15ull; // Round up to 16 byte aligned
+    checkCudaErrors(cudaMemcpy(bdinfo_gpu, bdinfo_tmp, s, cudaMemcpyHostToDevice));
+    // printf("params.bdinfo\n");
+
+    // 3. copy params.refl to GPU
+    ReflectionInfo *refl             = params.refl;
+    ReflectionInfo *refl_tmp         = params.refl_tmp;
+    ReflectionInfo *refl_gpu         = params.refl_gpu;
+    *refl_tmp                        = *refl;
+    ReflectionInfoTopBot *refltb     = &refl->top;
+    ReflectionInfoTopBot *refltb_tmp = &refl_tmp->top;
+    refltb_tmp->r                    = nullptr;
+    if(params.Bdry->Top.hs.bc == 'F') {
+        trackallocate_gpu(params, "reflection coefficients", refltb_tmp->r, refltb->NPts);
+        checkCudaErrors(cudaMemcpy(
+            refltb_tmp->r, refltb->r, sizeof(refltb->r[0]) * refltb->NPts,
+            cudaMemcpyHostToDevice));
+    }
+    refltb        = &refl->bot;
+    refltb_tmp    = &refl_tmp->bot;
+    refltb_tmp->r = nullptr;
+    if(params.Bdry->Bot.hs.bc == 'F') {
+        trackallocate_gpu(params, "reflection coefficients", refltb_tmp->r, refltb->NPts);
+        checkCudaErrors(cudaMemcpy(
+            refltb_tmp->r, refltb->r, sizeof(refltb->r[0]) * refltb->NPts,
+            cudaMemcpyHostToDevice));
+    }
+    s = (sizeof(ReflectionInfo) + 15ull) & ~15ull; // Round up to 16 byte aligned
+    checkCudaErrors(cudaMemcpy(refl_gpu, refl_tmp, s, cudaMemcpyHostToDevice));
+    // printf("params.refl\n");
+
+    // 4. copy params.ssp to GPU
+    SSPStructure *ssp     = params.ssp;
+    SSPStructure *ssp_tmp = params.ssp_tmp;
+    SSPStructure *ssp_gpu = params.ssp_gpu;
+    *ssp_tmp              = *ssp;
+    ssp_tmp->cMat         = nullptr;
+    ssp_tmp->czMat        = nullptr;
+    ssp_tmp->Seg.r        = nullptr;
+    ssp_tmp->Seg.x        = nullptr;
+    ssp_tmp->Seg.y        = nullptr;
+    ssp_tmp->Seg.z        = nullptr;
+    if(ssp->Type == 'Q') {
+        // quad
+        trackallocate_gpu(params, "quad SSP", ssp_tmp->cMat, ssp->NPts * ssp->Nr);
+        trackallocate_gpu(
+            params, "quad SSP derivatives", ssp_tmp->czMat, (ssp->NPts - 1) * ssp->Nr);
+        trackallocate_gpu(params, "quad SSP ranges", ssp_tmp->Seg.r, ssp->Nr);
+        checkCudaErrors(cudaMemcpy(
+            ssp_tmp->cMat, ssp->cMat, sizeof(ssp->cMat[0]) * ssp->NPts * ssp->Nr,
+            cudaMemcpyHostToDevice));
+        checkCudaErrors(cudaMemcpy(
+            ssp_tmp->czMat, ssp->czMat, sizeof(ssp->czMat[0]) * (ssp->NPts - 1) * ssp->Nr,
+            cudaMemcpyHostToDevice));
+        checkCudaErrors(cudaMemcpy(
+            ssp_tmp->Seg.r, ssp->Seg.r, sizeof(ssp->Seg.r[0]) * ssp->Nr,
+            cudaMemcpyHostToDevice));
+    } else if(ssp->Type == 'H') {
+        // hexahedral
+        trackallocate_gpu(params, "hexahedral SSP grid", ssp_tmp->Seg.x, ssp->Nx);
+        trackallocate_gpu(params, "hexahedral SSP grid", ssp_tmp->Seg.y, ssp->Ny);
+        trackallocate_gpu(params, "hexahedral SSP grid", ssp_tmp->Seg.z, ssp->Nz);
+        trackallocate_gpu(
+            params, "hexahedral SSP values", ssp_tmp->cMat, ssp->Nx * ssp->Ny * ssp->Nz);
+        trackallocate_gpu(
+            params, "hexahedral SSP derivatives", ssp_tmp->czMat,
+            ssp->Nx * ssp->Ny * (ssp->Nz - 1));
+        checkCudaErrors(cudaMemcpy(
+            ssp_tmp->Seg.x, ssp->Seg.x, sizeof(ssp->Seg.x[0]) * ssp->Nx,
+            cudaMemcpyHostToDevice));
+        checkCudaErrors(cudaMemcpy(
+            ssp_tmp->Seg.y, ssp->Seg.y, sizeof(ssp->Seg.y[0]) * ssp->Ny,
+            cudaMemcpyHostToDevice));
+        checkCudaErrors(cudaMemcpy(
+            ssp_tmp->Seg.z, ssp->Seg.z, sizeof(ssp->Seg.z[0]) * ssp->Nz,
+            cudaMemcpyHostToDevice));
+        checkCudaErrors(cudaMemcpy(
+            ssp_tmp->cMat, ssp->cMat, sizeof(ssp->cMat[0]) * ssp->Nx * ssp->Ny * ssp->Nz,
+            cudaMemcpyHostToDevice));
+        checkCudaErrors(cudaMemcpy(
+            ssp_tmp->czMat, ssp->czMat,
+            sizeof(ssp->czMat[0]) * ssp->Nx * ssp->Ny * (ssp->Nz - 1),
+            cudaMemcpyHostToDevice));
+    }
+    s = (sizeof(SSPStructure) + 15ull) & ~15ull; // Round up to 16 byte aligned
+    checkCudaErrors(cudaMemcpy(ssp_gpu, ssp_tmp, s, cudaMemcpyHostToDevice));
+    // printf("params.ssp\n");
+
+    // 5. copy params.Pos to GPU
+    Position *Pos     = params.Pos;
+    Position *Pos_tmp = params.Pos_tmp;
+    Position *Pos_gpu = params.Pos_gpu;
+    *Pos_tmp          = *Pos;
+    Pos_tmp->Sx       = nullptr;
+    Pos_tmp->Sy       = nullptr;
+    Pos_tmp->Sz       = nullptr;
+    Pos_tmp->Rz       = nullptr;
+    Pos_tmp->Rr       = nullptr;
+    Pos_tmp->theta    = nullptr;
+    Pos_tmp->t_rcvr   = nullptr;
+    trackallocate_gpu(params, "source x-coordinates", Pos_tmp->Sx, Pos->NSx);
+    trackallocate_gpu(params, "source y-coordinates", Pos_tmp->Sy, Pos->NSy);
+    trackallocate_gpu(params, "source z-coordinates", Pos_tmp->Sz, Pos->NSz);
+    trackallocate_gpu(params, "receiver z-coordinates", Pos_tmp->Rz, Pos->NRz);
+    trackallocate_gpu(params, "receiver r-coordinates", Pos_tmp->Rr, Pos->NRr);
+    trackallocate_gpu(params, "receiver bearings", Pos_tmp->theta, Pos->Ntheta);
+    trackallocate_gpu(
+        params, "receiver bearing sin/cos table", Pos_tmp->t_rcvr, Pos->Ntheta);
+    checkCudaErrors(cudaMemcpy(
+        Pos_tmp->Sx, Pos->Sx, sizeof(Pos->Sx[0]) * Pos->NSx, cudaMemcpyHostToDevice));
+    checkCudaErrors(cudaMemcpy(
+        Pos_tmp->Sy, Pos->Sy, sizeof(Pos->Sy[0]) * Pos->NSy, cudaMemcpyHostToDevice));
+    checkCudaErrors(cudaMemcpy(
+        Pos_tmp->Sz, Pos->Sz, sizeof(Pos->Sz[0]) * Pos->NSz, cudaMemcpyHostToDevice));
+    checkCudaErrors(cudaMemcpy(
+        Pos_tmp->Rz, Pos->Rz, sizeof(Pos->Rz[0]) * Pos->NRz, cudaMemcpyHostToDevice));
+    checkCudaErrors(cudaMemcpy(
+        Pos_tmp->Rr, Pos->Rr, sizeof(Pos->Rr[0]) * Pos->NRr, cudaMemcpyHostToDevice));
+    checkCudaErrors(cudaMemcpy(
+        Pos_tmp->theta, Pos->theta, sizeof(Pos->theta[0]) * Pos->Ntheta,
+        cudaMemcpyHostToDevice));
+    checkCudaErrors(cudaMemcpy(
+        Pos_tmp->t_rcvr, Pos->t_rcvr, sizeof(Pos->t_rcvr[0]) * Pos->Ntheta,
+        cudaMemcpyHostToDevice));
+    s = (sizeof(Position) + 15ull) & ~15ull; // Round up to 16 byte aligned
+    checkCudaErrors(cudaMemcpy(Pos_gpu, Pos_tmp, s, cudaMemcpyHostToDevice));
+    // printf("params.Pos\n");
+
+    // 6. copy params.Angles to GPU
+    AnglesStructure *Angles     = params.Angles;
+    AnglesStructure *Angles_tmp = params.Angles_tmp;
+    AnglesStructure *Angles_gpu = params.Angles_gpu;
+    *Angles_tmp                 = *Angles;
+    AngleInfo &a                = Angles->alpha;
+    AngleInfo &a_tmp            = Angles_tmp->alpha;
+    a_tmp.angles                = nullptr;
+    int32_t n                   = bhc::max(3, a.n);
+    trackallocate_gpu(params, "RayAnglesElevation", a_tmp.angles, n);
+    checkCudaErrors(cudaMemcpy(a_tmp.angles, a.angles, sizeof(a.angles[0]) * n, cudaMemcpyHostToDevice));
+    AngleInfo &b     = Angles->beta;
+    AngleInfo &b_tmp = Angles_tmp->beta;
+    b_tmp.angles     = nullptr;
+    if constexpr(!O3D) {
+        n = b.n;
+    } else {
+        n = bhc::max(3, b.n);
+    }
+    trackallocate_gpu(params, "RayAnglesBearing", b_tmp.angles, n);
+    checkCudaErrors(cudaMemcpy(b_tmp.angles, b.angles, sizeof(b.angles[0]) * n, cudaMemcpyHostToDevice));
+    s = (sizeof(AnglesStructure) + 15ull) & ~15ull; // Round up to 16 byte aligned
+    checkCudaErrors(cudaMemcpy(Angles_gpu, Angles_tmp, s, cudaMemcpyHostToDevice));
+    // printf("params.Angles\n");
+
+    // 7. copy params.freqinfo to GPU
+    FreqInfo *freqinfo     = params.freqinfo;
+    FreqInfo *freqinfo_tmp = params.freqinfo_tmp;
+    FreqInfo *freqinfo_gpu = params.freqinfo_gpu;
+    *freqinfo_tmp          = *freqinfo;
+    freqinfo_tmp->freqVec  = nullptr;
+    if(params.Bdry->Top.hs.Opt[5] == 'B') {
+        n = bhc::max(3, freqinfo->Nfreq);
+    } else {
+        n = freqinfo->Nfreq;
+    }
+    trackallocate_gpu(params, "Frequencies", freqinfo_tmp->freqVec, n);
+    checkCudaErrors(cudaMemcpy(
+        freqinfo_tmp->freqVec, freqinfo->freqVec,
+        sizeof(freqinfo->freqVec[0]) * n, cudaMemcpyHostToDevice));
+    s = (sizeof(FreqInfo) + 15ull) & ~15ull; // Round up to 16 byte aligned
+    checkCudaErrors(cudaMemcpy(freqinfo_gpu, freqinfo_tmp, s, cudaMemcpyHostToDevice));
+    // printf("params.freqinfo\n");
+
+    // 8. copy params.Beam to GPU
+    s = (sizeof(BeamStructure<O3D>) + 15ull) & ~15ull; // Round up to 16 byte aligned
+    checkCudaErrors(cudaMemcpy(params.Beam_gpu, params.Beam, s, cudaMemcpyHostToDevice));
+    // printf("params.Beam\n");
+
+    // 9. copy params.sbp to GPU
+    SBPInfo *sbp      = params.sbp;
+    SBPInfo *sbp_tmp  = params.sbp_tmp;
+    SBPInfo *sbp_gpu  = params.sbp_gpu;
+    *sbp_tmp          = *sbp;
+    sbp_tmp->SrcBmPat = nullptr;
+    trackallocate_gpu(params, "source beam pattern", sbp_tmp->SrcBmPat, sbp->NSBPPts * 2);
+    checkCudaErrors(cudaMemcpy(
+        sbp_tmp->SrcBmPat, sbp->SrcBmPat, sizeof(sbp->SrcBmPat[0]) * sbp->NSBPPts * 2,
+        cudaMemcpyHostToDevice));
+    s = (sizeof(SBPInfo) + 15ull) & ~15ull; // Round up to 16 byte aligned
+    checkCudaErrors(cudaMemcpy(sbp_gpu, sbp_tmp, s, cudaMemcpyHostToDevice));
+    // printf("params.sbp\n");
+
+    // 10. copy outputs.eigen to GPU
+    if constexpr(CFG::run::IsEigenrays()) {
+        EigenInfo *eigen     = outputs.eigen;
+        EigenInfo *eigen_tmp = outputs.eigen_tmp;
+        EigenInfo *eigen_gpu = outputs.eigen_gpu;
+        *eigen_tmp           = *eigen;
+        eigen_tmp->hits      = nullptr;
+        trackallocate_gpu(params, "eigenray hits", eigen_tmp->hits, eigen->memsize);
+        s = (sizeof(EigenInfo) + 15ull) & ~15ull; // Round up to 16 byte aligned
+        checkCudaErrors(cudaMemcpy(eigen_gpu, eigen_tmp, s, cudaMemcpyHostToDevice));
+        // printf("outputs.eigen\n");
+    }
+
+    // 11. copy outputs.arrinfo to GPU
+    if constexpr(CFG::run::IsArrivals()) {
+        ArrInfo *arrinfo     = outputs.arrinfo;
+        ArrInfo *arrinfo_tmp = outputs.arrinfo_tmp;
+        ArrInfo *arrinfo_gpu = outputs.arrinfo_gpu;
+        *arrinfo_tmp         = *arrinfo;
+        size_t nSrcs         = Pos->NSx * Pos->NSy * Pos->NSz;
+        size_t nSrcsRcvrs    = nSrcs * Pos->Ntheta * Pos->NRr * Pos->NRz_per_range;
+        arrinfo_tmp->Arr     = nullptr;
+        trackallocate_gpu(
+            params, "arrivals", arrinfo_tmp->Arr, nSrcsRcvrs * (size_t)arrinfo->MaxNArr);
+        checkCudaErrors(cudaMemcpy(
+            arrinfo_tmp->Arr, arrinfo->Arr,
+            sizeof(arrinfo->Arr[0]) * nSrcsRcvrs * (size_t)arrinfo->MaxNArr,
+            cudaMemcpyHostToDevice));
+        arrinfo_tmp->NArr = nullptr;
+        trackallocate_gpu(params, "arrivals", arrinfo_tmp->NArr, nSrcsRcvrs);
+        checkCudaErrors(cudaMemcpy(
+            arrinfo_tmp->NArr, arrinfo->NArr, sizeof(arrinfo->NArr[0]) * nSrcsRcvrs,
+            cudaMemcpyHostToDevice));
+        arrinfo_tmp->MaxNPerSource = nullptr;
+        // trackallocate_gpu(params, "arrivals", arrinfo_tmp->MaxNPerSource, nSrcs);
+        // cudaMemcpy(
+        //     arrinfo_tmp->MaxNPerSource, arrinfo->MaxNPerSource,
+        //     sizeof(arrinfo->MaxNPerSource[0]) * nSrcs, cudaMemcpyHostToDevice);
+        s = (sizeof(ArrInfo) + 15ull) & ~15ull; // Round up to 16 byte aligned
+        checkCudaErrors(cudaMemcpy(arrinfo_gpu, arrinfo_tmp, s, cudaMemcpyHostToDevice));
+        // printf("outputs.arrinfo\n");
+    }
+
+    // 12. copy outputs.arrinfo to GPU
+    outputs.uAllSources_gpu = nullptr;
+    if constexpr(CFG::run::IsTL()) {
+        n = Pos->NSz * Pos->NSx * Pos->NSy * Pos->Ntheta * Pos->NRz_per_range * Pos->NRr;
+        trackallocate_gpu(
+            params, "sound field / transmission loss", outputs.uAllSources_gpu, n);
+        checkCudaErrors(cudaMemcpy(
+            outputs.uAllSources_gpu, outputs.uAllSources, sizeof(cpxf) * n,
+            cudaMemcpyHostToDevice));
+        // printf("outputs.uAllSources\n");
+    }
+}
+
+template<typename CFG, bool O3D, bool R3D> void Copy2Cpu(
+    const bhcParams<O3D> &params, bhcOutputs<O3D, R3D> &outputs)
+{
+    // 1. copy outputs.eigen_gpu to CPU
+    if constexpr(CFG::run::IsEigenrays()) {
+        EigenInfo *eigen     = outputs.eigen;
+        EigenInfo *eigen_tmp = outputs.eigen_tmp;
+        EigenInfo *eigen_gpu = outputs.eigen_gpu;
+        uint64_t s = (sizeof(EigenInfo) + 15ull) & ~15ull; // Round up to 16 byte aligned
+        checkCudaErrors(cudaMemcpy(eigen_tmp, eigen_gpu, s, cudaMemcpyDeviceToHost));
+        checkCudaErrors(cudaMemcpy(
+            eigen->hits, eigen_tmp->hits, sizeof(eigen->hits[0]) * eigen->memsize,
+            cudaMemcpyDeviceToHost));
+        eigen->neigen = eigen_tmp->neigen;
+        trackdeallocate_gpu(params, eigen_tmp->hits);
+    }
+
+    // 2. copy outputs.arrinfo_gpu to CPU
+    if constexpr(CFG::run::IsArrivals()) {
+        ArrInfo *arrinfo     = outputs.arrinfo;
+        ArrInfo *arrinfo_tmp = outputs.arrinfo_tmp;
+        const Position *Pos  = params.Pos;
+        size_t nSrcs         = Pos->NSx * Pos->NSy * Pos->NSz;
+        size_t nSrcsRcvrs    = nSrcs * Pos->Ntheta * Pos->NRr * Pos->NRz_per_range;
+        checkCudaErrors(cudaMemcpy(
+            arrinfo->Arr, arrinfo_tmp->Arr,
+            sizeof(arrinfo->Arr[0]) * nSrcsRcvrs * (size_t)arrinfo->MaxNArr,
+            cudaMemcpyDeviceToHost));
+        checkCudaErrors(cudaMemcpy(
+            arrinfo->NArr, arrinfo_tmp->NArr, sizeof(arrinfo->NArr[0]) * nSrcsRcvrs,
+            cudaMemcpyDeviceToHost));
+        trackdeallocate_gpu(params, arrinfo_tmp->Arr);
+        trackdeallocate_gpu(params, arrinfo_tmp->NArr);
+    }
+
+    // 3. copy outputs.uAllSources_gpu to CPU
+    if constexpr(CFG::run::IsTL()) {
+        const Position *Pos = params.Pos;
+        size_t n = Pos->NSz * Pos->NSx * Pos->NSy * Pos->Ntheta * Pos->NRz_per_range
+            * Pos->NRr;
+        checkCudaErrors(cudaMemcpy(
+            outputs.uAllSources, outputs.uAllSources_gpu, sizeof(cpxf) * n,
+            cudaMemcpyDeviceToHost));
+        trackdeallocate_gpu(params, outputs.uAllSources_gpu);
+    }
+
+    // release gpu memeory in temporary structs
+    BdryInfo<O3D> *bdinfo_tmp         = params.bdinfo_tmp;
+    BdryInfoTopBot<O3D> *bdinfotb_tmp = &bdinfo_tmp->top;
+    trackdeallocate_gpu(params, bdinfotb_tmp->bd);
+    bdinfotb_tmp = &params.bdinfo_tmp->bot;
+    trackdeallocate_gpu(params, bdinfotb_tmp->bd);
+
+    ReflectionInfo *refl_tmp         = params.refl_tmp;
+    ReflectionInfoTopBot *refltb_tmp = &refl_tmp->top;
+    trackdeallocate_gpu(params, refltb_tmp->r);
+    refltb_tmp = &refl_tmp->bot;
+    trackdeallocate_gpu(params, refltb_tmp->r);
+
+    SSPStructure *ssp_tmp = params.ssp_tmp;
+    if(ssp_tmp->Type == 'Q') {
+        trackdeallocate_gpu(params, ssp_tmp->cMat);
+        trackdeallocate_gpu(params, ssp_tmp->czMat);
+        trackdeallocate_gpu(params, ssp_tmp->Seg.r);
+    } else if(ssp_tmp->Type == 'H') {
+        trackdeallocate_gpu(params, ssp_tmp->Seg.x);
+        trackdeallocate_gpu(params, ssp_tmp->Seg.y);
+        trackdeallocate_gpu(params, ssp_tmp->Seg.z);
+        trackdeallocate_gpu(params, ssp_tmp->cMat);
+        trackdeallocate_gpu(params, ssp_tmp->czMat);
+    }
+
+    Position *Pos_tmp = params.Pos_tmp;
+    trackdeallocate_gpu(params, Pos_tmp->Sx);
+    trackdeallocate_gpu(params, Pos_tmp->Sy);
+    trackdeallocate_gpu(params, Pos_tmp->Sz);
+    trackdeallocate_gpu(params, Pos_tmp->Rz);
+    trackdeallocate_gpu(params, Pos_tmp->Rr);
+    trackdeallocate_gpu(params, Pos_tmp->theta);
+    trackdeallocate_gpu(params, Pos_tmp->t_rcvr);
+
+    AnglesStructure *Angles_tmp = params.Angles_tmp;
+    AngleInfo &a_tmp            = Angles_tmp->alpha;
+    trackdeallocate_gpu(params, a_tmp.angles);
+    AngleInfo &b_tmp = Angles_tmp->beta;
+    trackdeallocate_gpu(params, b_tmp.angles);
+
+    FreqInfo *freqinfo_tmp = params.freqinfo_tmp;
+    trackdeallocate_gpu(params, freqinfo_tmp->freqVec);
+
+    SBPInfo *sbp_tmp = params.sbp_tmp;
+    trackdeallocate_gpu(params, sbp_tmp->SrcBmPat);
+}
 
 template<typename CFG, bool O3D, bool R3D> __global__ void LAUNCH_BOUNDS
 FieldModesKernel(bhcParams<O3D> params, bhcOutputs<O3D, R3D> outputs,
@@ -39,12 +426,13 @@ FieldModesKernel<GENCFG, @BHCGENO3D@, @BHCGENR3D@>(
     for(int32_t job = blockIdx.x * blockDim.x + threadIdx.x; true;
         job += gridDim.x * blockDim.x) {
         RayInitInfo rinit;
-        if(!GetJobIndices<@BHCGENO3D@>(rinit, job, params.Pos, params.Angles)) break;
+        if(!GetJobIndices<@BHCGENO3D@>(rinit, job, params.Pos_gpu, params.Angles_gpu)) break;
 
         MainFieldModes<GENCFG, @BHCGENO3D@, @BHCGENR3D@>(
-            rinit, outputs.uAllSources, params.Bdry, params.bdinfo, params.refl,
-            params.ssp, params.Pos, params.Angles, params.freqinfo, params.Beam,
-            params.sbp, outputs.eigen, outputs.arrinfo, errState);
+            rinit, outputs.uAllSources_gpu, params.Bdry_gpu, params.bdinfo_gpu,
+            params.refl_gpu, params.ssp_gpu, params.Pos_gpu, params.Angles_gpu,
+            params.freqinfo_gpu, params.Beam_gpu, params.sbp_gpu, outputs.eigen_gpu,
+            outputs.arrinfo_gpu, errState);
     }
 }
 
@@ -53,14 +441,23 @@ template<> void RunFieldModesImpl<GENCFG, @BHCGENO3D@, @BHCGENR3D@>(
     bhcOutputs<@BHCGENO3D@, @BHCGENR3D@> &outputs)
 {
     ErrState *errState;
-    checkCudaErrors(cudaMallocManaged(&errState, sizeof(ErrState)));
+    ErrState *errState_gpu;
+    errState = (ErrState *)malloc(sizeof(ErrState));
+    checkCudaErrors(cudaMalloc(&errState_gpu, sizeof(ErrState)));
     ResetErrState(errState);
+    checkCudaErrors(
+        cudaMemcpy(errState_gpu, errState, sizeof(ErrState), cudaMemcpyHostToDevice));
+    Copy2Gpu<GENCFG, @BHCGENO3D@, @BHCGENR3D@>(params, outputs);
     FieldModesKernel<GENCFG, @BHCGENO3D@, @BHCGENR3D@>
-        <<<GetInternal(params)->d_multiprocs, NUM_THREADS>>>(params, outputs, errState);
+        <<<GetInternal(params)->d_multiprocs, NUM_THREADS>>>(params, outputs, errState_gpu);
     syncAndCheckKernelErrors("FieldModesKernel<@BHCGENRUN@, @BHCGENINFL@, @BHCGENSSP@, "
                              "@BHCGENO3D@, @BHCGENR3D@>");
+    Copy2Cpu<GENCFG, @BHCGENO3D@, @BHCGENR3D@>(params, outputs);
+    checkCudaErrors(
+        cudaMemcpy(errState, errState_gpu, sizeof(ErrState), cudaMemcpyDeviceToHost));
     CheckReportErrors(GetInternal(params), errState);
-    checkCudaErrors(cudaFree(errState));
+    free(errState);
+    checkCudaErrors(cudaFree(errState_gpu));
 }
 
 }} // namespace bhc::mode

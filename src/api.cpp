@@ -237,48 +237,6 @@ template<bool O3D, bool R3D> bool setup(
         trackallocate(params, "data structures", outputs.rayinfo);
         trackallocate(params, "data structures", outputs.eigen);
         trackallocate(params, "data structures", outputs.arrinfo);
-#ifdef BHC_BUILD_CUDA
-        params.Bdry_gpu = nullptr;
-        params.bdinfo_gpu = nullptr;
-        params.refl_gpu = nullptr;
-        params.ssp_gpu = nullptr;
-        params.Pos_gpu = nullptr;
-        params.Angles_gpu = nullptr;
-        params.freqinfo_gpu = nullptr;
-        params.Beam_gpu = nullptr;
-        params.sbp_gpu = nullptr;
-        params.bdinfo_tmp = nullptr;
-        params.refl_tmp = nullptr;
-        params.ssp_tmp = nullptr;
-        params.Pos_tmp = nullptr;
-        params.Angles_tmp = nullptr;
-        params.freqinfo_tmp = nullptr;
-        params.sbp_tmp = nullptr;
-        outputs.eigen_gpu = nullptr;
-        outputs.arrinfo_gpu = nullptr;
-        outputs.eigen_tmp = nullptr;
-        outputs.arrinfo_tmp = nullptr;
-        trackallocate_gpu(params, "data structures", params.Bdry_gpu);
-        trackallocate_gpu(params, "data structures", params.bdinfo_gpu);
-        trackallocate_gpu(params, "data structures", params.refl_gpu);
-        trackallocate_gpu(params, "data structures", params.ssp_gpu);
-        trackallocate_gpu(params, "data structures", params.Pos_gpu);
-        trackallocate_gpu(params, "data structures", params.Angles_gpu);
-        trackallocate_gpu(params, "data structures", params.freqinfo_gpu);
-        trackallocate_gpu(params, "data structures", params.Beam_gpu);
-        trackallocate_gpu(params, "data structures", params.sbp_gpu);
-        trackallocate(params, "data structures", params.bdinfo_tmp);
-        trackallocate(params, "data structures", params.refl_tmp);
-        trackallocate(params, "data structures", params.ssp_tmp);
-        trackallocate(params, "data structures", params.Pos_tmp);
-        trackallocate(params, "data structures", params.Angles_tmp);
-        trackallocate(params, "data structures", params.freqinfo_tmp);
-        trackallocate(params, "data structures", params.sbp_tmp);
-        trackallocate_gpu(params, "data structures", outputs.eigen_gpu);
-        trackallocate_gpu(params, "data structures", outputs.arrinfo_gpu);
-        trackallocate(params, "data structures", outputs.eigen_tmp);
-        trackallocate(params, "data structures", outputs.arrinfo_tmp);
-#endif
 
         module::ModulesList<O3D> modules;
         mode::ModesList<O3D, R3D> modes;
@@ -438,7 +396,71 @@ template<bool O3D, bool R3D> bool run(
         sw.tock("Preprocess");
 
         sw.tick();
+#ifdef BHC_BUILD_CUDA
+        params.Bdry_gpu     = nullptr;
+        params.bdinfo_gpu   = nullptr;
+        params.refl_gpu     = nullptr;
+        params.ssp_gpu      = nullptr;
+        params.Pos_gpu      = nullptr;
+        params.Angles_gpu   = nullptr;
+        params.freqinfo_gpu = nullptr;
+        params.Beam_gpu     = nullptr;
+        params.sbp_gpu      = nullptr;
+        params.bdinfo_tmp   = nullptr;
+        params.refl_tmp     = nullptr;
+        params.ssp_tmp      = nullptr;
+        params.Pos_tmp      = nullptr;
+        params.Angles_tmp   = nullptr;
+        params.freqinfo_tmp = nullptr;
+        params.sbp_tmp      = nullptr;
+        outputs.eigen_gpu   = nullptr;
+        outputs.arrinfo_gpu = nullptr;
+        outputs.eigen_tmp   = nullptr;
+        outputs.arrinfo_tmp = nullptr;
+        trackallocate_gpu(params, "data structures", params.Bdry_gpu);
+        trackallocate_gpu(params, "data structures", params.bdinfo_gpu);
+        trackallocate_gpu(params, "data structures", params.refl_gpu);
+        trackallocate_gpu(params, "data structures", params.ssp_gpu);
+        trackallocate_gpu(params, "data structures", params.Pos_gpu);
+        trackallocate_gpu(params, "data structures", params.Angles_gpu);
+        trackallocate_gpu(params, "data structures", params.freqinfo_gpu);
+        trackallocate_gpu(params, "data structures", params.Beam_gpu);
+        trackallocate_gpu(params, "data structures", params.sbp_gpu);
+        trackallocate_cpu(params, "data structures", params.bdinfo_tmp);
+        trackallocate_cpu(params, "data structures", params.refl_tmp);
+        trackallocate_cpu(params, "data structures", params.ssp_tmp);
+        trackallocate_cpu(params, "data structures", params.Pos_tmp);
+        trackallocate_cpu(params, "data structures", params.Angles_tmp);
+        trackallocate_cpu(params, "data structures", params.freqinfo_tmp);
+        trackallocate_cpu(params, "data structures", params.sbp_tmp);
+        trackallocate_gpu(params, "data structures", outputs.eigen_gpu);
+        trackallocate_gpu(params, "data structures", outputs.arrinfo_gpu);
+        trackallocate_cpu(params, "data structures", outputs.eigen_tmp);
+        trackallocate_cpu(params, "data structures", outputs.arrinfo_tmp);
+#endif
         mo->Run(params, outputs);
+#ifdef BHC_BUILD_CUDA
+        trackdeallocate_gpu(params, params.Bdry_gpu);
+        trackdeallocate_gpu(params, params.bdinfo_gpu);
+        trackdeallocate_gpu(params, params.refl_gpu);
+        trackdeallocate_gpu(params, params.ssp_gpu);
+        trackdeallocate_gpu(params, params.Pos_gpu);
+        trackdeallocate_gpu(params, params.Angles_gpu);
+        trackdeallocate_gpu(params, params.freqinfo_gpu);
+        trackdeallocate_gpu(params, params.Beam_gpu);
+        trackdeallocate_gpu(params, params.sbp_gpu);
+        trackdeallocate_cpu(params, params.bdinfo_tmp);
+        trackdeallocate_cpu(params, params.refl_tmp);
+        trackdeallocate_cpu(params, params.ssp_tmp);
+        trackdeallocate_cpu(params, params.Pos_tmp);
+        trackdeallocate_cpu(params, params.Angles_tmp);
+        trackdeallocate_cpu(params, params.freqinfo_tmp);
+        trackdeallocate_cpu(params, params.sbp_tmp);
+        trackdeallocate_gpu(params, outputs.eigen_gpu);
+        trackdeallocate_gpu(params, outputs.arrinfo_gpu);
+        trackdeallocate_cpu(params, outputs.eigen_tmp);
+        trackdeallocate_cpu(params, outputs.arrinfo_tmp);
+#endif
         sw.tock("Run");
 
         sw.tick();
@@ -555,28 +577,6 @@ template<bool O3D, bool R3D> void finalize(
     trackdeallocate(params, outputs.rayinfo);
     trackdeallocate(params, outputs.eigen);
     trackdeallocate(params, outputs.arrinfo);
-#ifdef BHC_BUILD_CUDA
-    trackdeallocate_gpu(params, params.Bdry_gpu);
-    trackdeallocate_gpu(params, params.bdinfo_gpu);
-    trackdeallocate_gpu(params, params.refl_gpu);
-    trackdeallocate_gpu(params, params.ssp_gpu);
-    trackdeallocate_gpu(params, params.Pos_gpu);
-    trackdeallocate_gpu(params, params.Angles_gpu);
-    trackdeallocate_gpu(params, params.freqinfo_gpu);
-    trackdeallocate_gpu(params, params.Beam_gpu);
-    trackdeallocate_gpu(params, params.sbp_gpu);
-    trackdeallocate(params, params.bdinfo_tmp);
-    trackdeallocate(params, params.refl_tmp);
-    trackdeallocate(params, params.ssp_tmp);
-    trackdeallocate(params, params.Pos_tmp);
-    trackdeallocate(params, params.Angles_tmp);
-    trackdeallocate(params, params.freqinfo_tmp);
-    trackdeallocate(params, params.sbp_tmp);
-    trackdeallocate_gpu(params, outputs.eigen_gpu);
-    trackdeallocate_gpu(params, outputs.arrinfo_gpu);
-    trackdeallocate(params, outputs.eigen_tmp);
-    trackdeallocate(params, outputs.arrinfo_tmp);
-#endif
 
     if(GetInternal(params)->usedMemory != 0) {
         EXTWARN(

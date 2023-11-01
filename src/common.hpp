@@ -271,21 +271,21 @@ inline HOST_DEVICE void SETXY(vec3 &v, const vec2 &xy)
 // to use the underlying function with the correct precision.
 #ifdef __CUDA_ARCH__
 #define DEFINE_MATH_FUNC_2(BASE, DEV_F, HOST_F, DEV_D, HOST_D) \
-    __device__ inline float BASE(const float &a, const float &b) { return DEV_F(a, b); } \
-    __device__ inline double BASE(const double &a, const double &b) \
+    __host__ __device__ inline float BASE(const float &a, const float &b) { return DEV_F(a, b); } \
+    __host__ __device__ inline double BASE(const double &a, const double &b) \
     { \
         return DEV_D(a, b); \
     }
 #define DEFINE_MATH_FUNC_INT_2(BASE, DEV, HOST) \
-    __device__ inline int32_t BASE(const int32_t &a, const int32_t &b) \
+    __host__ __device__ inline int32_t BASE(const int32_t &a, const int32_t &b) \
     { \
         return DEV(a, b); \
     } \
-    __device__ inline uint32_t BASE(const uint32_t &a, const uint32_t &b) \
+    __host__ __device__ inline uint32_t BASE(const uint32_t &a, const uint32_t &b) \
     { \
         return DEV(a, b); \
     } \
-    __device__ inline size_t BASE(const size_t &a, const size_t &b) { return DEV(a, b); }
+    __host__ __device__ inline size_t BASE(const size_t &a, const size_t &b) { return DEV(a, b); }
 #else
 #define DEFINE_MATH_FUNC_2(BASE, DEV_F, HOST_F, DEV_D, HOST_D) \
     inline float BASE(const float &a, const float &b) { return HOST_F(a, b); } \

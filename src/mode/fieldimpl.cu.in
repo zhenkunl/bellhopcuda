@@ -448,8 +448,12 @@ template<> void RunFieldModesImpl<GENCFG, @BHCGENO3D@, @BHCGENR3D@>(
     checkCudaErrors(
         cudaMemcpy(errState_gpu, errState, sizeof(ErrState), cudaMemcpyHostToDevice));
     Copy2Gpu<GENCFG, @BHCGENO3D@, @BHCGENR3D@>(params, outputs);
+    const int grid_size = (params.Angles->alpha.n * params.Angles->beta.n
+                               * params.Pos->NSx * params.Pos->NSy * params.Pos->NSz
+                           + NUM_THREADS - 1)
+        / NUM_THREADS;
     FieldModesKernel<GENCFG, @BHCGENO3D@, @BHCGENR3D@>
-        <<<GetInternal(params)->d_multiprocs, NUM_THREADS>>>(params, outputs, errState_gpu);
+        <<<grid_size, NUM_THREADS>>>(params, outputs, errState_gpu);
     syncAndCheckKernelErrors("FieldModesKernel<@BHCGENRUN@, @BHCGENINFL@, @BHCGENSSP@, "
                              "@BHCGENO3D@, @BHCGENR3D@>");
     Copy2Cpu<GENCFG, @BHCGENO3D@, @BHCGENR3D@>(params, outputs);
